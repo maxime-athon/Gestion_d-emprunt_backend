@@ -1,0 +1,8 @@
+flask
+flask_sqlalchemy
+flask_marshmallow
+marshmallow-sqlalchemy
+flask_cors
+flask_mail
+apscheduler
+python-dotenv

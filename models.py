@@ -1,45 +1,47 @@
-from datetime import datetime, timedelta
-from database import db
+from database import db  # ✅ Import unique et partagé
+from datetime import datetime
 
-# ---------- User ----------
 class User(db.Model):
+    __tablename__ = 'user'
+
     id = db.Column(db.Integer, primary_key=True)
-    nom = db.Column(db.String(120), nullable=False)
+    nom = db.Column(db.String(100), nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
-    mot_de_passe = db.Column(db.String(255), nullable=False)  # stocker hash en prod
+    mot_de_passe = db.Column(db.String(128), nullable=False)
+    is_admin = db.Column(db.Boolean, default=False)
+
     emprunts = db.relationship('Emprunt', backref='user', lazy=True)
     notifications = db.relationship('Notification', backref='user', lazy=True)
 
-# ---------- Document ----------
 class Document(db.Model):
+    __tablename__ = 'document'
+
     id = db.Column(db.Integer, primary_key=True)
-    titre = db.Column(db.String(255), nullable=False)
-    auteur = db.Column(db.String(255))
+    titre = db.Column(db.String(200), nullable=False)
+    auteur = db.Column(db.String(100), nullable=False)
     categorie = db.Column(db.String(100))
-    statut = db.Column(db.String(50), default='disponible')  # 'disponible' | 'emprunte'
+    statut = db.Column(db.String(50), default="disponible")
+
     emprunts = db.relationship('Emprunt', backref='document', lazy=True)
 
-# ---------- Emprunt ----------
 class Emprunt(db.Model):
+    __tablename__ = 'emprunt'
+
     id = db.Column(db.Integer, primary_key=True)
-    date_emprunt = db.Column(db.DateTime, default=datetime.utcnow)
-    date_retour = db.Column(db.DateTime)
-    statut = db.Column(db.String(50), default='en cours')  # en cours, en retard, terminé
-    renouvellements = db.Column(db.Integer, default=0)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     document_id = db.Column(db.Integer, db.ForeignKey('document.id'), nullable=False)
+    date_emprunt = db.Column(db.DateTime, default=datetime.utcnow)
+    date_retour = db.Column(db.DateTime)
+    statut = db.Column(db.String(50), default="en cours")
 
-    def __init__(self, user_id, document_id, duree=7):
-        self.user_id = user_id
-        self.document_id = document_id
-        self.date_emprunt = datetime.utcnow()
-        self.date_retour = self.date_emprunt + timedelta(days=duree)
+    notifications = db.relationship('Notification', backref='emprunt', lazy=True)
 
-# ---------- Notification ----------
 class Notification(db.Model):
+    __tablename__ = 'notification'
+
     id = db.Column(db.Integer, primary_key=True)
-    message = db.Column(db.String(500))
-    date_notification = db.Column(db.DateTime, default=datetime.utcnow)
-    type = db.Column(db.String(50))  # rappel, echeance, retard
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    emprunt_id = db.Column(db.Integer, db.ForeignKey('emprunt.id'), nullable=True)  # optionnel
+    emprunt_id = db.Column(db.Integer, db.ForeignKey('emprunt.id'), nullable=False)
+    type = db.Column(db.String(50))  # rappel, echeance, retard
+    message = db.Column(db.Text)
+    date_creation = db.Column(db.DateTime, default=datetime.utcnow)

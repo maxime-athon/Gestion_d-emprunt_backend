@@ -1,122 +1,181 @@
 from flask import Blueprint, request, jsonify
-from database import db
-from models import User, Document, Emprunt, Notification
-from schemas import (
-    user_schema, users_schema,
-    document_schema, documents_schema,
-    emprunt_schema, emprunts_schema,
-    notification_schema, notifications_schema
-)
-from datetime import timedelta, datetime
+from models import db, User, Document, Emprunt, Notification
+from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime, timedelta
 
-api = Blueprint("api", __name__)
+api = Blueprint('api', __name__)
 
-# ---------------- Users ----------------
-@api.route("/users", methods=["POST"])
-def create_user():
+# 🔐 Inscription
+@api.route('/register', methods=['POST'])
+def register():
     data = request.get_json()
+    if User.query.filter_by(email=data['email']).first():
+        return jsonify({"error": "Email déjà utilisé"}), 409
+
+    hashed_pw = generate_password_hash(data['mot_de_passe'])
     user = User(
-        nom=data.get("nom"),
-        email=data.get("email"),
-        mot_de_passe=data.get("mot_de_passe")
+        nom=data['nom'],
+        email=data['email'],
+        mot_de_passe=hashed_pw,
+        is_admin=data.get('is_admin', False)
     )
     db.session.add(user)
     db.session.commit()
+    return jsonify({"message": "Inscription réussie"}), 201
+
+# 🔐 Connexion
+@api.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    user = User.query.filter_by(email=data['email']).first()
+    if user and check_password_hash(user.mot_de_passe, data['mot_de_passe']):
+        return jsonify({
+            "message": "Connexion réussie",
+            "user_id": user.id,
+            "nom": user.nom,
+            "is_admin": user.is_admin
+        }), 200
+    return jsonify({"error": "Identifiants invalides"}), 401
+
+# 👤 Liste des utilisateurs avec leurs emprunts
+@api.route('/users', methods=['GET'])
+def get_users():
+    users = User.query.all()
+    result = []
+    for u in users:
+        emprunts = []
+        for e in u.emprunts:
+            emprunts.append({
+                "id": e.id,
+                "statut": e.statut,
+                "date_retour": e.date_retour,
+                "document": {
+                    "id": e.document.id,
+                    "titre": e.document.titre,
+                    "auteur": e.document.auteur
+                }
+            })
+        result.append({
+            "id": u.id,
+            "nom": u.nom,
+            "email": u.email,
+            "emprunts": emprunts
+        })
+    return jsonify(result)
+
+# 📚 Liste des documents
+@api.route('/documents', methods=['GET'])
+def get_documents():
+    docs = Document.query.all()
+    return jsonify([{
+        "id": d.id,
+        "titre": d.titre,
+        "auteur": d.auteur,
+        "categorie": d.categorie,
+        "statut": d.statut
+    } for d in docs])
+
+# 📥 Ajouter un document
+@api.route('/documents', methods=['POST'])
+def add_document():
+    data = request.get_json()
+    doc = Document(
+        titre=data['titre'],
+        auteur=data['auteur'],
+        categorie=data.get('categorie', ''),
+        statut='disponible'
+    )
+    db.session.add(doc)
+    db.session.commit()
+    return jsonify({"message": "Document ajouté"}), 201
+
+# 📦 Emprunter un document
+@api.route('/emprunt', methods=['POST'])
+def emprunter():
+    data = request.get_json()
+    doc = Document.query.get(data['document_id'])
+    if not doc or doc.statut != 'disponible':
+        return jsonify({"error": "Document non disponible"}), 400
+
+    emprunt = Emprunt(
+        user_id=data['user_id'],
+        document_id=data['document_id'],
+        date_emprunt=datetime.utcnow(),
+        date_retour=datetime.utcnow() + timedelta(days= 7),
+        statut='en cours'
+    )
+    doc.statut = 'emprunté'
+    db.session.add(emprunt)
+    db.session.commit()
+    return jsonify({"message": "Emprunt effectué"}), 201
+
+# 🔔 Notifications par utilisateur
+@api.route('/notifications', methods=['GET'])
+def get_notifications():
+    user_id = request.args.get('user_id')
+    if not user_id:
+        return jsonify([])
+
+    notifs = Notification.query.filter_by(user_id=user_id).all()
+    return jsonify([{
+        "id": n.id,
+        "type": n.type,
+        "message": n.message,
+        "emprunt_id": n.emprunt_id
+    } for n in notifs])
+
+@api.route('/profil/<int:user_id>', methods=['GET'])
+def get_profil(user_id):
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"error": "Utilisateur introuvable"}), 404
+
+    emprunts = [{
+        "id": e.id,
+        "statut": e.statut,
+        "date_emprunt": e.date_emprunt,
+        "date_retour": e.date_retour,
+        "document": {
+            "id": e.document.id,
+            "titre": e.document.titre,
+            "auteur": e.document.auteur
+        }
+    } for e in user.emprunts]
+
+    notifications = [{
+        "id": n.id,
+        "type": n.type,
+        "message": n.message,
+        "date_creation": n.date_creation,
+        "emprunt_id": n.emprunt_id
+    } for n in user.notifications]
+
     return jsonify({
         "id": user.id,
         "nom": user.nom,
         "email": user.email,
-        "mot_de_passe": user.mot_de_passe,
-        "emprunts": [],
-        "notifications": []
-    }), 201
-
-@api.route("/users", methods=["GET"])
-def get_users():
-    users = User.query.all()
-    return jsonify([
-        {
-            "id": u.id,
-            "nom": u.nom,
-            "email": u.email
-        } for u in users
-    ])
-
-
-# ---------------- Documents ----------------
-@api.route("/documents", methods=["GET"])
-def list_documents():
-    docs = Document.query.all()
-    return documents_schema.jsonify(docs)
-
-@api.route("/documents", methods=["POST"])
-def create_document():
-    data = request.get_json()
-    if not data or not data.get("titre"):
-        return jsonify({"error": "titre requis"}), 400
-    doc = Document(titre=data["titre"], auteur=data.get("auteur"), categorie=data.get("categorie"))
-    db.session.add(doc)
-    db.session.commit()
-    return document_schema.jsonify(doc), 201
-
-# ---------------- Emprunts ----------------
-@api.route("/emprunt", methods=["POST"])
-def create_emprunt():
-    data = request.get_json()
-    user_id = data.get("user_id")
-    document_id = data.get("document_id")
-    if not user_id or not document_id:
-        return jsonify({"error": "user_id et document_id requis"}), 400
+        "is_admin": user.is_admin,
+        "emprunts": emprunts,
+        "notifications": notifications
+    })
+@api.route('/admin/data', methods=['GET'])
+def get_admin_data():
+    user_id = request.args.get('user_id')
     user = User.query.get(user_id)
-    doc = Document.query.get(document_id)
-    if not user or not doc:
-        return jsonify({"error": "user ou document introuvable"}), 404
-    if doc.statut != "disponible":
-        return jsonify({"error": "document non disponible"}), 400
-    emprunt = Emprunt(user_id=user.id, document_id=doc.id)
-    doc.statut = "emprunte"
-    db.session.add(emprunt)
-    db.session.commit()
-    return emprunt_schema.jsonify(emprunt), 201
+    if not user or not user.is_admin:
+        return jsonify({"error": "Accès refusé"}), 403
 
-@api.route("/emprunt/<int:id>/renew", methods=["PUT"])
-def renew_emprunt(id):
-    emprunt = Emprunt.query.get_or_404(id)
-    # Règle métier : 1 renouvellement maximum
-    if emprunt.renouvellements >= 1 or emprunt.statut != "en cours":
-        return jsonify({"error": "Renouvellement impossible"}), 400
-    emprunt.date_retour = emprunt.date_retour + timedelta(days=7)
-    emprunt.renouvellements += 1
-    db.session.commit()
-    return emprunt_schema.jsonify(emprunt)
-
-@api.route("/emprunt/<int:id>/return", methods=["PUT"])
-def return_emprunt(id):
-    emprunt = Emprunt.query.get_or_404(id)
-    if emprunt.statut == "terminé":
-        return jsonify({"message": "déjà retourné"}), 200
-    emprunt.statut = "terminé"
-    # rendre le document disponible
-    doc = Document.query.get(emprunt.document_id)
-    if doc:
-        doc.statut = "disponible"
-    db.session.commit()
-    return emprunt_schema.jsonify(emprunt)
-
-@api.route("/emprunts", methods=["GET"])
-def list_emprunts():
-    user_id = request.args.get("user_id", type=int)
-    if user_id:
-        emprunts = Emprunt.query.filter_by(user_id=user_id).all()
-    else:
-        emprunts = Emprunt.query.all()
-    return emprunts_schema.jsonify(emprunts)
-
-# ---------------- Notifications ----------------
-@api.route("/notifications", methods=["GET"])
-def list_notifications():
-    user_id = request.args.get("user_id", type=int)
-    if not user_id:
-        return notifications_schema.jsonify(Notification.query.order_by(Notification.date_notification.desc()).all())
-    notifs = Notification.query.filter_by(user_id=user_id).order_by(Notification.date_notification.desc()).all()
-    return notifications_schema.jsonify(notifs)
+    users = User.query.all()
+    result = []
+    for u in users:
+        emprunts = [{
+            "titre": e.document.titre,
+            "statut": e.statut,
+            "date_retour": e.date_retour
+        } for e in u.emprunts]
+        result.append({
+            "nom": u.nom,
+            "email": u.email,
+            "emprunts": emprunts
+        })
+    return jsonify(result)
